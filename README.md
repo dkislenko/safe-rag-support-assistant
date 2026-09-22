@@ -1,5 +1,12 @@
 # Safe RAG Support Assistant
 
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-REST%20API-009688)
+![LangChain](https://img.shields.io/badge/LangChain-RAG-1C3C3C)
+![FAISS](https://img.shields.io/badge/FAISS-Vector%20Search-orange)
+![Hugging%20Face](https://img.shields.io/badge/Hugging%20Face-Transformers-yellow)
+![License](https://img.shields.io/badge/License-MIT-green)
+
 RAG-ассистент для технической поддержки SaaS-продукта с семантическим поиском, указанием источников, защитными механизмами и проверкой ответов на галлюцинации.
 
 В проекте используется синтетическая база знаний для вымышленного SaaS-продукта **TaskFlow CRM**.
