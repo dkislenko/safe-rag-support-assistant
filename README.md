@@ -116,7 +116,7 @@ safe-rag-support-assistant/
 Клонировать репозиторий:
 
 ```bash
-git clone https://github.com/kislyjdanil6-sys/safe-rag-support-assistant.git
+git clone https://github.com/dkislenko/safe-rag-support-assistant.git
 cd safe-rag-support-assistant
 ```
 
