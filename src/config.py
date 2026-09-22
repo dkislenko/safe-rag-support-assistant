@@ -14,7 +14,7 @@ LLM_MODEL_NAME = os.getenv(
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "700"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "120"))
 
-RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "5"))
+RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "3"))
 MMR_FETCH_K = int(os.getenv("MMR_FETCH_K", "12"))
 MMR_LAMBDA = float(os.getenv("MMR_LAMBDA", "0.65"))
 

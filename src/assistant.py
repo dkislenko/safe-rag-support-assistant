@@ -40,6 +40,9 @@ def format_sources(
 
 
 def sentence_split(text: str) -> list[str]:
+    """
+    Split text into individual sentences.
+    """
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text).strip()
 
@@ -58,15 +61,37 @@ def sentence_split(text: str) -> list[str]:
 def clean_document_text(
     document: Document,
 ) -> str:
+    """
+    Remove Markdown formatting before building
+    an extractive fallback response.
+    """
     text = document.page_content
 
+    # Remove Markdown headings.
     text = re.sub(
-        r"^#.*$",
+        r"^#{1,6}\s+.*$",
         "",
         text,
         flags=re.MULTILINE,
     )
 
+    # Remove Markdown bullet markers.
+    text = re.sub(
+        r"^\s*[-*+]\s+",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+
+    # Remove numbered list markers.
+    text = re.sub(
+        r"^\s*\d+\.\s+",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+
+    # Normalize whitespace.
     text = re.sub(
         r"\s+",
         " ",
@@ -79,19 +104,38 @@ def clean_document_text(
 def build_extractive_answer(
     documents: list[Document],
 ) -> str:
-    sources = get_sources(documents)
+    """
+    Build a safe answer directly from retrieved documents.
 
+    This function is used as a fallback when the LLM returns
+    an empty, low-quality or potentially hallucinated answer.
+    """
     useful_sentences: list[str] = []
+    used_sources: list[str] = []
 
     for document in documents[:4]:
         text = clean_document_text(document)
 
+        source = document.metadata.get(
+            "source",
+            "unknown",
+        )
+
+        document_was_used = False
+
         for sentence in sentence_split(text):
             if 40 <= len(sentence) <= 260:
                 useful_sentences.append(sentence)
+                document_was_used = True
 
             if len(useful_sentences) >= 6:
                 break
+
+        if (
+            document_was_used
+            and source not in used_sources
+        ):
+            used_sources.append(source)
 
         if len(useful_sentences) >= 6:
             break
@@ -99,8 +143,7 @@ def build_extractive_answer(
     if not useful_sentences:
         return (
             "В базе знаний нет достаточной информации "
-            "для точного ответа.\n\n"
-            f"Источники: {format_sources(sources)}"
+            "для точного ответа."
         )
 
     lines = [
@@ -112,9 +155,11 @@ def build_extractive_answer(
             f"- {sentence}"
         )
 
-    lines.append(
-        f"\nИсточники: {format_sources(sources)}"
-    )
+    if used_sources:
+        lines.append(
+            "\nИсточники: "
+            f"{format_sources(used_sources)}"
+        )
 
     return "\n".join(lines)
 
@@ -123,15 +168,33 @@ def deterministic_answer(
     query: str,
     documents: list[Document],
 ) -> str | None:
+    """
+    Handle scenarios where a deterministic response
+    is safer or more reliable than LLM generation.
+    """
     lowered = query.lower()
-    sources = get_sources(documents)
-    sources_text = format_sources(sources)
 
+    available_sources = get_sources(documents)
+
+    def sources_for(
+        *preferred_sources: str,
+    ) -> str:
+        selected = [
+            source
+            for source in preferred_sources
+            if source in available_sources
+        ]
+
+        if not selected:
+            selected = available_sources
+
+        return format_sources(selected)
+
+    # Price questions.
     if is_price_question(query):
-        tariff_found = any(
-            document.metadata.get("source")
-            == "02_tariffs.md"
-            for document in documents
+        tariff_found = (
+            "02_tariffs.md"
+            in available_sources
         )
 
         if tariff_found:
@@ -145,15 +208,18 @@ def deterministic_answer(
                 "расширенные отчёты, приоритетную поддержку "
                 "в течение 8 часов и персонального менеджера "
                 "внедрения.\n\n"
-                f"Источники: {sources_text}"
+                "Источники: "
+                f"{sources_for('02_tariffs.md')}"
             )
 
         return (
             "В базе знаний нет достаточной информации "
             "о стоимости тарифов.\n\n"
-            f"Источники: {sources_text}"
+            "Источники: "
+            f"{format_sources(available_sources)}"
         )
 
+    # Client visibility.
     if (
         "не видит клиент" in lowered
         or "не видит клиента" in lowered
@@ -169,9 +235,14 @@ def deterministic_answer(
             "где он назначен ответственным.\n\n"
             "Проверьте ответственного за клиента, роль "
             "пользователя и статус карточки клиента.\n\n"
-            f"Источники: {sources_text}"
+            "Источники: "
+            f"{sources_for(
+                '05_troubleshooting.md',
+                '03_roles_and_permissions.md',
+            )}"
         )
 
+    # Tariff comparison.
     if (
         "тариф" in lowered
         and (
@@ -197,9 +268,11 @@ def deterministic_answer(
             "- расширенные отчёты;\n"
             "- поддержка в течение 8 часов;\n"
             "- персональный менеджер внедрения.\n\n"
-            f"Источники: {sources_text}"
+            "Источники: "
+            f"{sources_for('02_tariffs.md')}"
         )
 
+    # CSV import.
     if (
         "csv" in lowered
         or "импорт" in lowered
@@ -212,9 +285,14 @@ def deterministic_answer(
             "4. Отсутствие пустых строк.\n"
             "5. Разделитель — запятая или точка с запятой.\n"
             "6. Наличие некорректных строк.\n\n"
-            f"Источники: {sources_text}"
+            "Источники: "
+            f"{sources_for(
+                '04_integrations.md',
+                '05_troubleshooting.md',
+            )}"
         )
 
+    # Telegram notifications.
     if (
         "telegram" in lowered
         or "уведомлен" in lowered
@@ -225,9 +303,11 @@ def deterministic_answer(
             "- Telegram-аккаунт не подключён;\n"
             "- бот TaskFlow CRM заблокирован;\n"
             "- уведомления отключены в настройках профиля.\n\n"
-            f"Источники: {sources_text}"
+            "Источники: "
+            f"{sources_for('05_troubleshooting.md')}"
         )
 
+    # Support request.
     if (
         "поддержк" in lowered
         and (
@@ -248,9 +328,11 @@ def deterministic_answer(
             "- Start — 48 часов;\n"
             "- Team — 24 часа;\n"
             "- Business — 8 часов.\n\n"
-            f"Источники: {sources_text}"
+            "Источники: "
+            f"{sources_for('07_support_process.md')}"
         )
 
+    # Roles and permissions.
     if (
         "роль" in lowered
         or "права" in lowered
@@ -265,7 +347,10 @@ def deterministic_answer(
             "Менеджер — работает только с клиентами "
             "и сделками, где назначен ответственным.\n\n"
             "Наблюдатель — имеет доступ только на чтение.\n\n"
-            f"Источники: {sources_text}"
+            "Источники: "
+            f"{sources_for(
+                '03_roles_and_permissions.md'
+            )}"
         )
 
     return None
@@ -276,7 +361,9 @@ class SupportAssistant:
         self,
         use_llm: bool = True,
     ) -> None:
-        vectorstore, self.chunks = build_vectorstore()
+        vectorstore, self.chunks = (
+            build_vectorstore()
+        )
 
         self.retriever = RAGRetriever(
             vectorstore=vectorstore
@@ -294,6 +381,16 @@ class SupportAssistant:
         self,
         query: str,
     ) -> dict[str, Any]:
+        """
+        Process a user query through:
+
+        1. Safety guardrails
+        2. Retrieval
+        3. Deterministic rules or LLM generation
+        4. Groundedness validation
+        5. Safe extractive fallback
+        6. Retrieval trace
+        """
         query = query.strip()
 
         if not query:
@@ -301,7 +398,13 @@ class SupportAssistant:
                 "Query must not be empty."
             )
 
-        unsafe, pattern = is_unsafe_query(query)
+        # -------------------------------------------------
+        # 1. Safety check before retrieval / generation
+        # -------------------------------------------------
+
+        unsafe, pattern = is_unsafe_query(
+            query
+        )
 
         if unsafe:
             answer = (
@@ -327,13 +430,25 @@ class SupportAssistant:
                     "suspicious_hits": [],
                     "hallucination_risk": "низкий",
                     "reasons": [
-                        "запрос остановлен фильтром безопасности",
-                        f"сработавший паттерн: {pattern}",
+                        (
+                            "запрос остановлен "
+                            "фильтром безопасности"
+                        ),
+                        (
+                            "сработавший паттерн: "
+                            f"{pattern}"
+                        ),
                     ],
                 },
             }
 
-        documents = self.retriever.retrieve(query)
+        # -------------------------------------------------
+        # 2. Retrieval
+        # -------------------------------------------------
+
+        documents = self.retriever.retrieve(
+            query
+        )
 
         if not documents:
             return {
@@ -350,31 +465,53 @@ class SupportAssistant:
                     "suspicious_hits": [],
                     "hallucination_risk": "средний",
                     "reasons": [
-                        "не найден релевантный контекст"
+                        (
+                            "не найден релевантный "
+                            "контекст"
+                        )
                     ],
                 },
             }
+
+        # -------------------------------------------------
+        # 3. Deterministic response
+        # -------------------------------------------------
 
         answer = deterministic_answer(
             query=query,
             documents=documents,
         )
 
+        # -------------------------------------------------
+        # 4. LLM generation
+        # -------------------------------------------------
+
         if answer is None:
-            if self.use_llm and self.llm is not None:
+            if (
+                self.use_llm
+                and self.llm is not None
+            ):
                 try:
                     answer = self.llm.generate(
                         query=query,
                         documents=documents,
                     )
 
-                    if "Источники:" not in answer:
+                    if (
+                        "Источники:"
+                        not in answer
+                    ):
                         answer += (
                             "\n\nИсточники: "
-                            f"{format_sources(get_sources(documents))}"
+                            f"{format_sources(
+                                get_sources(documents)
+                            )}"
                         )
 
                 except Exception:
+                    # If the model fails or returns
+                    # a low-quality response, use
+                    # a safe extractive fallback.
                     answer = build_extractive_answer(
                         documents
                     )
@@ -384,14 +521,22 @@ class SupportAssistant:
                     documents
                 )
 
+        # -------------------------------------------------
+        # 5. Groundedness validation
+        # -------------------------------------------------
+
         groundedness = groundedness_check(
             answer=answer,
             documents=documents,
             query=query,
         )
 
+        # Replace high-risk generation with
+        # an extractive grounded answer.
         if (
-            groundedness["hallucination_risk"]
+            groundedness[
+                "hallucination_risk"
+            ]
             == "высокий"
         ):
             answer = build_extractive_answer(
@@ -404,20 +549,34 @@ class SupportAssistant:
                 query=query,
             )
 
-        trace = []
+        # -------------------------------------------------
+        # 6. Retrieval trace
+        # -------------------------------------------------
+
+        trace: list[dict[str, Any]] = []
 
         for index, document in enumerate(
             documents,
             start=1,
         ):
+            retrieval_score = (
+                document.metadata.get(
+                    "retrieval_score"
+                )
+            )
+
             trace.append(
                 {
                     "rank": index,
-                    "source": document.metadata.get(
-                        "source"
+                    "source": (
+                        document.metadata.get(
+                            "source"
+                        )
                     ),
-                    "title": document.metadata.get(
-                        "title"
+                    "title": (
+                        document.metadata.get(
+                            "title"
+                        )
                     ),
                     "retrieval_query": (
                         document.metadata.get(
@@ -425,13 +584,15 @@ class SupportAssistant:
                         )
                     ),
                     "retrieval_score": (
-                        document.metadata.get(
-                            "retrieval_score"
-                        )
+                        retrieval_score
                     ),
                     "preview": (
-                        document.page_content[:350]
-                        .replace("\n", " ")
+                        document.page_content[
+                            :350
+                        ].replace(
+                            "\n",
+                            " ",
+                        )
                     ),
                 }
             )
